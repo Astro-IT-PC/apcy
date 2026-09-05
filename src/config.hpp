@@ -25,3 +25,8 @@ std::string userConfigDir();
 // <executable dir>/config.json, <userConfigDir>/config.json.
 // $CLICKUP_API_TOKEN overrides the token.
 Config loadConfig(int argc, char **argv, const std::string &appDir);
+
+// Writes `token` into the config file that was loaded, or creates a new
+// config.json in userConfigDir() with default settings. Updates cfg on
+// success; on failure returns false and fills `error`.
+bool saveToken(Config &cfg, const std::string &token, std::string &error);

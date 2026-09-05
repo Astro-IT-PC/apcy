@@ -120,13 +120,24 @@ target_link_libraries(apcy PRIVATE
 
 target_compile_definitions(apcy PRIVATE APCY_VERSION="${PROJECT_VERSION}")
 
-if(WIN32 AND APCY_WIN32_GUI)
-  # GUI subsystem, but keep the plain main() entry point
-  set_target_properties(apcy PROPERTIES WIN32_EXECUTABLE TRUE)
-  if(MSVC)
-    target_link_options(apcy PRIVATE /ENTRY:mainCRTStartup)
+if(WIN32)
+  target_sources(apcy PRIVATE packaging/apcy.rc)  # executable icon
+  if(APCY_WIN32_GUI)
+    # GUI subsystem, but keep the plain main() entry point
+    set_target_properties(apcy PROPERTIES WIN32_EXECUTABLE TRUE)
+    if(MSVC)
+      target_link_options(apcy PRIVATE /ENTRY:mainCRTStartup)
+    endif()
   endif()
 endif()
+
+# Files the app loads at runtime (see findResource in main.cpp).
+# Regenerate the logo files with: python3 packaging/make_icons.py
+set(APCY_RESOURCE_FILES
+  resources/Roboto-Regular.ttf
+  resources/logo.png
+  resources/logo-256.png
+)
 
 if(APPLE AND APCY_BUNDLE)
   set_target_properties(apcy PROPERTIES
@@ -135,9 +146,11 @@ if(APPLE AND APCY_BUNDLE)
     MACOSX_BUNDLE_GUI_IDENTIFIER "app.apcy"
     MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+    MACOSX_BUNDLE_ICON_FILE "apcy.icns"
     MACOSX_BUNDLE_COPYRIGHT "MIT License")
-  target_sources(apcy PRIVATE resources/Roboto-Regular.ttf)
-  set_source_files_properties(resources/Roboto-Regular.ttf PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+  target_sources(apcy PRIVATE ${APCY_RESOURCE_FILES} packaging/apcy.icns)
+  set_source_files_properties(${APCY_RESOURCE_FILES} packaging/apcy.icns
+                              PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 endif()
 
 if(MSVC)
@@ -188,6 +201,8 @@ else()
   install(FILES config.example.json README.md DESTINATION ${CMAKE_INSTALL_DOCDIR} COMPONENT apcy)
   if(NOT APPLE)
     install(FILES packaging/apcy.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications COMPONENT apcy)
+    install(FILES resources/logo-256.png DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps
+            RENAME apcy.png COMPONENT apcy)
   endif()
 endif()
 

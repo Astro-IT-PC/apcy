@@ -1,6 +1,7 @@
 #include "config.hpp"
 
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -92,4 +93,51 @@ Config loadConfig(int argc, char **argv, const std::string &appDir) {
                         : "config.json has no \"token\" (" + cfg.loadedFrom + ")";
     }
     return cfg;
+}
+
+bool saveToken(Config &cfg, const std::string &token, std::string &error) {
+    std::string path = cfg.loadedFrom;
+    json j = json::object();
+
+    if (!path.empty()) {
+        std::string text;
+        if (readFile(path, text)) {
+            json existing = json::parse(text, nullptr, false, true);
+            if (existing.is_object()) j = existing;
+        }
+    } else {
+        const std::string dir = userConfigDir();
+        if (dir.empty()) {
+            error = "Could not determine a config directory (HOME / APPDATA not set)";
+            return false;
+        }
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        path = dir + "config.json";
+    }
+
+    // fresh file: write the full set of settings so it is easy to edit later
+    if (!j.contains("team_id")) j["team_id"] = cfg.teamId;
+    if (!j.contains("include_closed")) j["include_closed"] = cfg.includeClosed;
+    if (!j.contains("comment_scan_days")) j["comment_scan_days"] = cfg.commentScanDays;
+    if (!j.contains("max_comment_scan")) j["max_comment_scan"] = cfg.maxCommentScan;
+    if (!j.contains("refresh_minutes")) j["refresh_minutes"] = cfg.refreshMinutes;
+    if (!j.contains("mention_patterns")) j["mention_patterns"] = cfg.mentionPatterns;
+    j["token"] = token;
+
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) {
+        error = "Could not write " + path;
+        return false;
+    }
+    out << j.dump(2) << "\n";
+    if (!out) {
+        error = "Could not write " + path;
+        return false;
+    }
+
+    cfg.token = token;
+    cfg.loadedFrom = path;
+    cfg.error.clear();
+    return true;
 }

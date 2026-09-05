@@ -19,8 +19,13 @@ The token starts with `pk_`.
 
 ## 2. Configure
 
-Copy `config.example.json` to `config.json` (next to the executable, or in the directory you launch from)
-and paste the token:
+The easiest way: start the app. On the first run (or whenever ClickUp rejects the token) a dialog asks for the
+token. Paste it (`Ctrl/Cmd+V` or the `Paste` button) and press Enter; it is written to `config.json` in your
+per-user config directory (`~/.config/apcy/` or `%APPDATA%\apcy\`). The `Token` button in the header opens the
+same dialog later.
+
+Alternatively copy `config.example.json` to `config.json` (next to the executable, or in the directory you
+launch from) and paste the token:
 
 ```json
 {
@@ -120,6 +125,7 @@ and attaches the packages to a GitHub release when you push a tag such as `v0.1.
 | open task in the browser | `Open in ClickUp` button in the detail pane |
 | close details | `Close`, or `< Back` / `Esc` when there is no parent task to return to |
 | sort | `Sort:` chip or `S` cycles due date -> priority -> recently updated -> status |
+| set / change the API token | `Token` button (dialog opens automatically when no token is configured) |
 | refresh | `Refresh` button or `R` |
 | filter | tabs: All / Assigned / Mentioned / My comments |
 | scroll | mouse wheel / trackpad |
@@ -153,12 +159,21 @@ Changing a status is the only write the app performs; everything else is read-on
   for `Retry-After` and retries.
 - Tasks in archived lists are not returned by the ClickUp "filtered team tasks" endpoint.
 
+## Logo and icons
+
+The logo (an inbox tray with a rising checkmark) is rendered by
+[packaging/make_icons.py](packaging/make_icons.py), a dependency-free Python script that writes
+`resources/logo.png` (header), `resources/logo-256.png` (window / Linux icon), `packaging/apcy.ico` (Windows) and
+`packaging/apcy.icns` (macOS, needs `iconutil`). Edit the shapes or colors in the script and rerun it, or replace
+the generated files with your own artwork of the same names.
+
 ## Project layout
 
 ```
 CMakeLists.txt          dependencies + build
 config.example.json     copy to config.json
-resources/              Roboto font (Apache 2.0)
+resources/              Roboto font (Apache 2.0), logo PNGs
+packaging/              icons, Windows .rc, Linux .desktop, make_icons.py
 src/main.cpp            Clay UI, frame loop, background fetch thread
 src/clickup.*           ClickUp API client and the assigned/mention/comment query
 src/http.*              libcurl GET wrapper

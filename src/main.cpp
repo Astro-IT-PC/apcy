@@ -215,6 +215,17 @@ struct App {
     int savedGeometry[4] = {0, 0, 0, 0};  // x, y, w, h last written to window.json
     bool debug = false;
     Font fonts[1] = {};
+    Texture2D logo{};
+    bool logoLoaded = false;
+
+    // token modal
+    bool modalOpen = false;
+    bool modalCanCancel = true;
+    bool tokenVisible = false;
+    std::string tokenInput;
+    std::string tokenDisplay;
+    std::string modalError;
+    std::string modalPathLine;
 };
 
 void rebuildRows(App &app);
@@ -462,6 +473,76 @@ void closeDetail(App &app) {
 }
 
 // ---------------------------------------------------------------------------
+// Token modal: enter / paste the ClickUp API token inside the app
+// ---------------------------------------------------------------------------
+void openTokenModal(App &app, const std::string &message) {
+    app.modalOpen = true;
+    app.modalCanCancel = !app.cfg.token.empty();
+    app.tokenInput = app.cfg.token;
+    app.tokenVisible = false;
+    app.modalError = message;
+}
+
+void closeTokenModal(App &app) {
+    app.modalOpen = false;
+    app.modalError.clear();
+}
+
+void appendTokenText(App &app, const char *text) {
+    if (!text) return;
+    for (const char *p = text; *p; ++p) {
+        const unsigned char c = (unsigned char)*p;
+        if (c > 32 && c < 127 && app.tokenInput.size() < 256) app.tokenInput.push_back((char)c);
+    }
+}
+
+void saveTokenFromModal(App &app) {
+    std::string token = app.tokenInput;
+    while (!token.empty() && std::isspace((unsigned char)token.back())) token.pop_back();
+    while (!token.empty() && std::isspace((unsigned char)token.front())) token.erase(token.begin());
+    if (token.empty()) {
+        app.modalError = "Paste your ClickUp API token first.";
+        return;
+    }
+    std::string err;
+    if (!saveToken(app.cfg, token, err)) {
+        app.modalError = err;
+        return;
+    }
+    std::fprintf(stderr, "[config] token saved to %s\n", app.cfg.loadedFrom.c_str());
+    app.errorLine.clear();
+    closeTokenModal(app);
+    startFetch(app);
+}
+
+// Keyboard handling for the modal: typing, backspace, Ctrl/Cmd+V, Enter, Esc.
+void handleModalInput(App &app) {
+    const bool mod = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL) || IsKeyDown(KEY_LEFT_SUPER) ||
+                     IsKeyDown(KEY_RIGHT_SUPER);
+    if (mod && IsKeyPressed(KEY_V)) appendTokenText(app, GetClipboardText());
+    int ch = 0;
+    while ((ch = GetCharPressed()) > 0) {
+        if (!mod && ch > 32 && ch < 127 && app.tokenInput.size() < 256) app.tokenInput.push_back((char)ch);
+    }
+    if (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) {
+        if (mod) app.tokenInput.clear();
+        else if (!app.tokenInput.empty()) app.tokenInput.pop_back();
+    }
+    if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER)) saveTokenFromModal(app);
+    if (IsKeyPressed(KEY_ESCAPE) && app.modalCanCancel) closeTokenModal(app);
+
+    // what the text field shows: masked unless "Show" is active, with a blinking caret
+    std::string shown = app.tokenInput;
+    if (!app.tokenVisible && shown.size() > 3) shown = shown.substr(0, 3) + std::string(shown.size() - 3, '*');
+    if (shown.size() > 46) shown = "..." + shown.substr(shown.size() - 43);
+    shown += ((int)(GetTime() * 2) % 2 == 0) ? "|" : " ";
+    app.tokenDisplay = shown;
+
+    const std::string path = app.cfg.loadedFrom.empty() ? userConfigDir() + "config.json" : app.cfg.loadedFrom;
+    app.modalPathLine = "Stored in " + textutil::toAscii(path);
+}
+
+// ---------------------------------------------------------------------------
 // Model -> display strings
 // ---------------------------------------------------------------------------
 void applyFilter(App &app) {
@@ -663,6 +744,7 @@ void pollBackground(App &app) {
         } else {
             app.errorLine = res->error;
             std::fprintf(stderr, "[fetch] error: %s\n", res->error.c_str());
+            if (res->error.find("401") != std::string::npos) openTokenModal(app, "ClickUp rejected this token.");
         }
     }
     // 2) small jobs
@@ -749,9 +831,16 @@ void layoutHeader(App &app) {
             CLAY(CLAY_ID("HeaderTop"), {.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0)},
                                                    .childGap = 8,
                                                    .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}}) {
+                if (app.logoLoaded) {
+                    CLAY(CLAY_ID("Logo"), {.layout = {.sizing = {CLAY_SIZING_FIXED(26), CLAY_SIZING_FIXED(26)}},
+                                           .image = {.imageData = &app.logo}}) {}
+                }
                 CLAY(CLAY_ID("HeaderUser"), {.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0)}}}) {
                     CLAY_TEXT(S(app.userLine), MUTED_SM);
                 }
+                static const std::string kToken = "Token";
+                if (chipButton(CLAY_ID("TokenBtn"), kToken, TAB_SM, C_CHIP, C_CHIP_H, Clay_Padding{9, 9, 7, 7}))
+                    openTokenModal(app, "");
                 layoutRefreshButton(app, busy, 88, 30, BUTTON_SM);
             }
             CLAY(CLAY_ID("HeaderStatusRow"), {.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0)},
@@ -769,6 +858,10 @@ void layoutHeader(App &app) {
     CLAY(CLAY_ID("Header"), {.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0)},
                                         .childGap = 16,
                                         .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}}) {
+        if (app.logoLoaded) {
+            CLAY(CLAY_ID("Logo"), {.layout = {.sizing = {CLAY_SIZING_FIXED(32), CLAY_SIZING_FIXED(32)}},
+                                   .image = {.imageData = &app.logo}}) {}
+        }
         CLAY(CLAY_ID("HeaderUser"), {.layout = {.sizing = {CLAY_SIZING_FIT(0), CLAY_SIZING_FIT(0)}}}) {
             CLAY_TEXT(S(app.userLine), MUTED_TEXT);
         }
@@ -776,6 +869,9 @@ void layoutHeader(App &app) {
                                                   .childAlignment = {.x = CLAY_ALIGN_X_RIGHT}}}) {
             CLAY_TEXT(S(app.statusLine), app.errorLine.empty() || busy ? STATUS_TEXT : STATUS_ERR);
         }
+        static const std::string kToken = "Token";
+        if (chipButton(CLAY_ID("TokenBtn"), kToken, TAB_TEXT, C_CHIP, C_CHIP_H, Clay_Padding{12, 12, 9, 9}))
+            openTokenModal(app, "");
         layoutRefreshButton(app, busy, 110, 36, BUTTON_TEXT);
     }
 }
@@ -1067,6 +1163,84 @@ void layoutBody(App &app) {
     }
 }
 
+// Modal dialog to enter the ClickUp token. A floating element attached to the
+// root covers the whole window and captures the pointer, so nothing behind it
+// reacts to clicks while it is open.
+void layoutTokenModal(App &app) {
+    const float w = (float)GetScreenWidth(), h = (float)GetScreenHeight();
+    const float boxW = std::min(470.0f, w - 24.0f);
+    static const std::string kPaste = "Paste", kShow = "Show", kHide = "Hide", kClear = "Clear",
+                             kCancel = "Cancel", kSave = "Save token";
+
+    CLAY(CLAY_ID("ModalBackdrop"), {.layout = {.sizing = {CLAY_SIZING_FIXED(w), CLAY_SIZING_FIXED(h)},
+                                               .childAlignment = {CLAY_ALIGN_X_CENTER, CLAY_ALIGN_Y_CENTER}},
+                                    .backgroundColor = {0, 0, 0, 170},
+                                    .floating = {.zIndex = 10, .attachTo = CLAY_ATTACH_TO_ROOT}}) {
+        CLAY(CLAY_ID("Modal"), {.layout = {.sizing = {CLAY_SIZING_FIXED(boxW), CLAY_SIZING_FIT(0)},
+                                           .padding = CLAY_PADDING_ALL(18),
+                                           .childGap = 12,
+                                           .layoutDirection = CLAY_TOP_TO_BOTTOM},
+                                .backgroundColor = C_PANEL,
+                                .cornerRadius = CLAY_CORNER_RADIUS(10),
+                                .border = {.color = C_ROW_H, .width = CLAY_BORDER_OUTSIDE(1)}}) {
+            CLAY(CLAY_ID("ModalTitleRow"), {.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0)},
+                                                       .childGap = 12,
+                                                       .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}}) {
+                if (app.logoLoaded) {
+                    CLAY(CLAY_ID("ModalLogo"), {.layout = {.sizing = {CLAY_SIZING_FIXED(44), CLAY_SIZING_FIXED(44)}},
+                                                .image = {.imageData = &app.logo}}) {}
+                }
+                CLAY(CLAY_ID("ModalTitleCol"), {.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0)},
+                                                           .childGap = 2,
+                                                           .layoutDirection = CLAY_TOP_TO_BOTTOM}}) {
+                    CLAY_TEXT(CLAY_STRING("Connect apcy to ClickUp"), DETAIL_TITLE);
+                    CLAY_TEXT(CLAY_STRING("Personal API token"), MUTED_SM);
+                }
+            }
+            CLAY_TEXT(CLAY_STRING("In ClickUp open Settings > Apps > API Token and press Generate. "
+                                  "Paste the token below; it starts with pk_ and is only stored on this computer."),
+                      MUTED_SM);
+
+            CLAY(CLAY_ID("TokenInput"), {.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(40)},
+                                                    .padding = {12, 12, 0, 0},
+                                                    .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
+                                         .backgroundColor = C_BG,
+                                         .cornerRadius = CLAY_CORNER_RADIUS(6),
+                                         .clip = {.horizontal = true},
+                                         .border = {.color = C_ACCENT, .width = CLAY_BORDER_OUTSIDE(1)}}) {
+                if (app.tokenInput.empty())
+                    CLAY_TEXT(CLAY_STRING("pk_..."), Clay_TextElementConfig{.textColor = C_MUTED, .fontId = 0,
+                                                                          .fontSize = 15, .wrapMode = CLAY_TEXT_WRAP_NONE});
+                else
+                    CLAY_TEXT(S(app.tokenDisplay), Clay_TextElementConfig{.textColor = C_TEXT, .fontId = 0,
+                                                                        .fontSize = 15, .letterSpacing = 1,
+                                                                        .wrapMode = CLAY_TEXT_WRAP_NONE});
+            }
+
+            CLAY(CLAY_ID("ModalTools"), {.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0)}, .childGap = 6}}) {
+                if (chipButton(CLAY_ID("PasteBtn"), kPaste, TAB_SM, C_CHIP, C_CHIP_H)) appendTokenText(app, GetClipboardText());
+                if (chipButton(CLAY_ID("ShowBtn"), app.tokenVisible ? kHide : kShow, TAB_SM, C_CHIP, C_CHIP_H))
+                    app.tokenVisible = !app.tokenVisible;
+                if (chipButton(CLAY_ID("ClearBtn"), kClear, TAB_SM, C_CHIP, C_CHIP_H)) app.tokenInput.clear();
+            }
+
+            if (!app.modalError.empty()) CLAY_TEXT(S(app.modalError), ERROR_SM);
+            CLAY_TEXT(S(app.modalPathLine), MUTED_SM);
+
+            CLAY(CLAY_ID("ModalActions"), {.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0)},
+                                                      .childGap = 8,
+                                                      .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}}) {
+                if (app.modalCanCancel) CLAY_TEXT(CLAY_STRING("Enter: save   Esc: cancel"), MUTED_SM);
+                else CLAY_TEXT(CLAY_STRING("Enter: save"), MUTED_SM);
+                CLAY(CLAY_ID("ModalSpacer"), {.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(1)}}}) {}
+                if (app.modalCanCancel && chipButton(CLAY_ID("CancelBtn"), kCancel, BUTTON_SM, C_CHIP, C_CHIP_H))
+                    closeTokenModal(app);
+                if (chipButton(CLAY_ID("SaveBtn"), kSave, BUTTON_SM, C_ACCENT, C_ACCENT_H)) saveTokenFromModal(app);
+            }
+        }
+    }
+}
+
 Clay_RenderCommandArray buildLayout(App &app) {
     const uint16_t pad = app.compact ? 10 : 16;
     const uint16_t gap = app.compact ? 8 : 12;
@@ -1081,6 +1255,7 @@ Clay_RenderCommandArray buildLayout(App &app) {
         layoutBody(app);
         if (app.compact) CLAY_TEXT(S(app.footerShort), MUTED_SM);
         else CLAY_TEXT(S(app.footerLine), MUTED_TEXT);
+        if (app.modalOpen) layoutTokenModal(app);
     }
     return Clay_EndLayout(GetFrameTime());
 }
@@ -1091,12 +1266,16 @@ Clay_RenderCommandArray buildLayout(App &app) {
 void frame(App &app) {
     pollBackground(app);
 
-    if (IsKeyPressed(KEY_R)) startFetch(app);
-    if (IsKeyPressed(KEY_S)) cycleSort(app);
-    if (IsKeyPressed(KEY_ESCAPE)) goBack(app);
-    if (IsKeyPressed(KEY_D)) {
-        app.debug = !app.debug;
-        Clay_SetDebugModeEnabled(app.debug);
+    if (app.modalOpen) {
+        handleModalInput(app);  // the modal owns the keyboard while open
+    } else {
+        if (IsKeyPressed(KEY_R)) startFetch(app);
+        if (IsKeyPressed(KEY_S)) cycleSort(app);
+        if (IsKeyPressed(KEY_ESCAPE)) goBack(app);
+        if (IsKeyPressed(KEY_D)) {
+            app.debug = !app.debug;
+            Clay_SetDebugModeEnabled(app.debug);
+        }
     }
     if (app.cfg.refreshMinutes > 0 && app.lastFetchDone >= 0 && !app.shared->busy.load() &&
         GetTime() - app.lastFetchDone > app.cfg.refreshMinutes * 60.0) {
@@ -1286,6 +1465,24 @@ int main(int argc, char **argv) {
     app.fonts[0] = LoadFontEx(fontPath.c_str(), 40, nullptr, 95);
     SetTextureFilter(app.fonts[0].texture, TEXTURE_FILTER_BILINEAR);
 
+    // logo: header texture + window icon (the icon is ignored on macOS, where the bundle icon is used)
+    const std::string logoPath = findResource("logo.png", appDir);
+    if (FileExists(logoPath.c_str())) {
+        app.logo = LoadTexture(logoPath.c_str());
+        app.logoLoaded = app.logo.id != 0;
+        if (app.logoLoaded) SetTextureFilter(app.logo, TEXTURE_FILTER_BILINEAR);
+    }
+#ifndef __APPLE__  // macOS windows have no per-window icon; the .app bundle carries apcy.icns
+    const std::string iconPath = findResource("logo-256.png", appDir);
+    if (FileExists(iconPath.c_str())) {
+        Image icon = LoadImage(iconPath.c_str());
+        if (icon.data) {
+            SetWindowIcon(icon);
+            UnloadImage(icon);
+        }
+    }
+#endif
+
     Clay_SetMaxElementCount(16384);
     Clay_SetMaxMeasureTextCacheWordCount(65536);
     uint32_t arenaSize = Clay_MinMemorySize();
@@ -1300,7 +1497,8 @@ int main(int argc, char **argv) {
         if (std::string(argv[i]) == "--demo") demo = true;
 
     if (demo) loadDemo(app);
-    else if (app.cfg.error.empty()) startFetch(app);
+    else if (!app.cfg.token.empty()) startFetch(app);
+    else openTokenModal(app, "");  // first run: ask for the token right away
 
     while (!WindowShouldClose()) {
         frame(app);
@@ -1324,6 +1522,7 @@ int main(int argc, char **argv) {
     for (auto &j : app.jobs)
         if (j.th.joinable()) j.th.join();
 
+    if (app.logoLoaded) UnloadTexture(app.logo);
     UnloadFont(app.fonts[0]);
     Clay_Raylib_Close();
     std::free(arenaMemory);
