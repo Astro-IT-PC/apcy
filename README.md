@@ -19,10 +19,11 @@ The token starts with `pk_`.
 
 ## 2. Configure
 
-The easiest way: start the app. On the first run (or whenever ClickUp rejects the token) a dialog asks for the
-token. Paste it (`Ctrl/Cmd+V` or the `Paste` button) and press Enter; it is written to `config.json` in your
-per-user config directory (`~/.config/apcy/` or `%APPDATA%\apcy\`). The `Token` button in the header opens the
-same dialog later.
+The easiest way: start the app. On the first run (or whenever ClickUp rejects the token) the Settings dialog
+asks for the token. Paste it (`Ctrl/Cmd+V` or the `Paste` button) and press Enter; it is written to
+`config.json` in your per-user config directory (`~/.config/apcy/` or `%APPDATA%\apcy\`). The dialog also has
+optional email and username fields that override the profile of the token for mention matching. The `Settings`
+button in the header opens it later; `Tab` moves between fields.
 
 Alternatively copy `config.example.json` to `config.json` (next to the executable, or in the directory you
 launch from) and paste the token:
@@ -43,6 +44,7 @@ launch from) and paste the token:
 |-----|---------|
 | `token` | personal API token. `CLICKUP_API_TOKEN` env var overrides it. |
 | `team_id` | restrict to one workspace id. Empty = all workspaces the token can see. |
+| `user_email`, `username` | optional. Mentions are matched against the profile of the token; set these to match against a different email / username instead (also editable in the Settings dialog). |
 | `include_closed` | also list tasks in closed statuses. |
 | `comment_scan_days` | how far back (by task update date) to look for comments. `0` disables comment scanning. |
 | `max_comment_scan` | upper bound of tasks per workspace whose comments are fetched (one request each, ClickUp allows ~100 requests/minute). |
@@ -115,6 +117,23 @@ per-user directory instead of next to the binary: `%APPDATA%\apcy\config.json` o
 [.github/workflows/build.yml](.github/workflows/build.yml) builds and packages all three platforms on every push
 and attaches the packages to a GitHub release when you push a tag such as `v0.1.0`.
 
+### macOS: "apcy.app is damaged and can't be opened"
+
+macOS shows this for a downloaded app whose code signature is missing or invalid. Packages are now signed as
+the last packaging step (ad-hoc by default), which turns the message into the normal "Apple could not verify..."
+prompt; allow the app once under **System Settings > Privacy & Security > Open Anyway**.
+
+If you already downloaded a build that shows the "damaged" dialog, remove the quarantine flag instead of
+trashing it:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/apcy.app
+```
+
+For a prompt-free install you need an Apple Developer ID: configure it with
+`-DAPCY_CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"` (or the `APCY_CODESIGN_IDENTITY`
+secret in CI) and notarize the DMG with `xcrun notarytool submit --wait` followed by `xcrun stapler staple`.
+
 ## Usage
 
 | action | how |
@@ -125,7 +144,7 @@ and attaches the packages to a GitHub release when you push a tag such as `v0.1.
 | open task in the browser | `Open in ClickUp` button in the detail pane |
 | close details | `Close`, or `< Back` / `Esc` when there is no parent task to return to |
 | sort | `Sort:` chip or `S` cycles due date -> priority -> recently updated -> status |
-| set / change the API token | `Token` button (dialog opens automatically when no token is configured) |
+| token, email, username | `Settings` button (opens automatically when no token is configured) |
 | refresh | `Refresh` button or `R` |
 | filter | tabs: All / Assigned / Mentioned / My comments |
 | scroll | mouse wheel / trackpad |

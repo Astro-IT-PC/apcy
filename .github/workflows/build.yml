@@ -23,7 +23,11 @@ jobs:
             cmake_args: ""
           - name: macos-arm64
             os: macos-latest
-            cmake_args: "-DAPCY_BUNDLE=ON"
+            # Ad-hoc signed by default. For a signature Gatekeeper accepts without
+            # prompting, import a Developer ID certificate into the runner keychain
+            # in an earlier step and set the APCY_CODESIGN_IDENTITY secret to its
+            # name, then notarize the DMG (xcrun notarytool submit --wait).
+            cmake_args: "-DAPCY_BUNDLE=ON -DAPCY_CODESIGN_IDENTITY=${{ secrets.APCY_CODESIGN_IDENTITY || '-' }}"
     steps:
       - uses: actions/checkout@v4
 

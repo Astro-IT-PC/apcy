@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -218,12 +219,14 @@ struct App {
     Texture2D logo{};
     bool logoLoaded = false;
 
-    // token modal
+    // settings modal (token, email, username)
+    enum { FIELD_TOKEN = 0, FIELD_EMAIL, FIELD_USERNAME, FIELD_COUNT };
     bool modalOpen = false;
     bool modalCanCancel = true;
     bool tokenVisible = false;
-    std::string tokenInput;
-    std::string tokenDisplay;
+    int focusedField = FIELD_TOKEN;
+    std::string fieldValue[FIELD_COUNT];
+    std::string fieldDisplay[FIELD_COUNT];
     std::string modalError;
     std::string modalPathLine;
 };
@@ -314,6 +317,9 @@ void startFetch(App &app) {
         try {
             clickup::Client client(cfg.token, &shared->cancel);
             res->me = client.me();
+            // settings may override the profile of the token (mention matching, header)
+            if (!cfg.userEmail.empty()) res->me.email = cfg.userEmail;
+            if (!cfg.userName.empty()) res->me.username = cfg.userName;
 
             clickup::FetchOptions opt;
             opt.teamId = cfg.teamId;
@@ -473,70 +479,102 @@ void closeDetail(App &app) {
 }
 
 // ---------------------------------------------------------------------------
-// Token modal: enter / paste the ClickUp API token inside the app
+// Settings modal: token, and optional email / username overrides
 // ---------------------------------------------------------------------------
-void openTokenModal(App &app, const std::string &message) {
+void openSettings(App &app, const std::string &message) {
     app.modalOpen = true;
     app.modalCanCancel = !app.cfg.token.empty();
-    app.tokenInput = app.cfg.token;
+    app.fieldValue[App::FIELD_TOKEN] = app.cfg.token;
+    app.fieldValue[App::FIELD_EMAIL] = app.cfg.userEmail;
+    app.fieldValue[App::FIELD_USERNAME] = app.cfg.userName;
+    app.focusedField = app.cfg.token.empty() ? App::FIELD_TOKEN : App::FIELD_EMAIL;
     app.tokenVisible = false;
     app.modalError = message;
 }
 
-void closeTokenModal(App &app) {
+void closeSettings(App &app) {
     app.modalOpen = false;
     app.modalError.clear();
 }
 
-void appendTokenText(App &app, const char *text) {
+// Appends printable text to the focused field. The token never contains spaces;
+// usernames may.
+void appendToField(App &app, const char *text) {
     if (!text) return;
+    std::string &v = app.fieldValue[app.focusedField];
+    const bool allowSpace = app.focusedField != App::FIELD_TOKEN;
     for (const char *p = text; *p; ++p) {
         const unsigned char c = (unsigned char)*p;
-        if (c > 32 && c < 127 && app.tokenInput.size() < 256) app.tokenInput.push_back((char)c);
+        if (c >= 32 && c < 127 && (c != ' ' || allowSpace) && v.size() < 256) v.push_back((char)c);
     }
 }
 
-void saveTokenFromModal(App &app) {
-    std::string token = app.tokenInput;
-    while (!token.empty() && std::isspace((unsigned char)token.back())) token.pop_back();
-    while (!token.empty() && std::isspace((unsigned char)token.front())) token.erase(token.begin());
+std::string trimmed(std::string s) {
+    while (!s.empty() && std::isspace((unsigned char)s.back())) s.pop_back();
+    while (!s.empty() && std::isspace((unsigned char)s.front())) s.erase(s.begin());
+    return s;
+}
+
+void saveSettingsFromModal(App &app) {
+    const std::string token = trimmed(app.fieldValue[App::FIELD_TOKEN]);
+    const std::string email = trimmed(app.fieldValue[App::FIELD_EMAIL]);
+    const std::string username = trimmed(app.fieldValue[App::FIELD_USERNAME]);
     if (token.empty()) {
         app.modalError = "Paste your ClickUp API token first.";
+        app.focusedField = App::FIELD_TOKEN;
+        return;
+    }
+    if (!email.empty() && email.find('@') == std::string::npos) {
+        app.modalError = "That email does not look right.";
+        app.focusedField = App::FIELD_EMAIL;
         return;
     }
     std::string err;
-    if (!saveToken(app.cfg, token, err)) {
+    if (!saveSettings(app.cfg, token, email, username, err)) {
         app.modalError = err;
         return;
     }
-    std::fprintf(stderr, "[config] token saved to %s\n", app.cfg.loadedFrom.c_str());
+    std::fprintf(stderr, "[config] settings saved to %s\n", app.cfg.loadedFrom.c_str());
     app.errorLine.clear();
-    closeTokenModal(app);
+    closeSettings(app);
     startFetch(app);
 }
 
-// Keyboard handling for the modal: typing, backspace, Ctrl/Cmd+V, Enter, Esc.
+// Keyboard handling for the modal: typing, backspace, Ctrl/Cmd+V, Tab, Enter, Esc.
 void handleModalInput(App &app) {
     const bool mod = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL) || IsKeyDown(KEY_LEFT_SUPER) ||
                      IsKeyDown(KEY_RIGHT_SUPER);
-    if (mod && IsKeyPressed(KEY_V)) appendTokenText(app, GetClipboardText());
+    if (mod && IsKeyPressed(KEY_V)) appendToField(app, GetClipboardText());
     int ch = 0;
     while ((ch = GetCharPressed()) > 0) {
-        if (!mod && ch > 32 && ch < 127 && app.tokenInput.size() < 256) app.tokenInput.push_back((char)ch);
+        if (!mod && ch >= 32 && ch < 127) {
+            const char c = (char)ch;
+            appendToField(app, std::string(1, c).c_str());
+        }
     }
     if (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) {
-        if (mod) app.tokenInput.clear();
-        else if (!app.tokenInput.empty()) app.tokenInput.pop_back();
+        std::string &v = app.fieldValue[app.focusedField];
+        if (mod) v.clear();
+        else if (!v.empty()) v.pop_back();
     }
-    if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER)) saveTokenFromModal(app);
-    if (IsKeyPressed(KEY_ESCAPE) && app.modalCanCancel) closeTokenModal(app);
+    if (IsKeyPressed(KEY_TAB)) {
+        const bool back = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+        app.focusedField = (app.focusedField + (back ? App::FIELD_COUNT - 1 : 1)) % App::FIELD_COUNT;
+    }
+    if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER)) saveSettingsFromModal(app);
+    if (IsKeyPressed(KEY_ESCAPE) && app.modalCanCancel) closeSettings(app);
 
-    // what the text field shows: masked unless "Show" is active, with a blinking caret
-    std::string shown = app.tokenInput;
-    if (!app.tokenVisible && shown.size() > 3) shown = shown.substr(0, 3) + std::string(shown.size() - 3, '*');
-    if (shown.size() > 46) shown = "..." + shown.substr(shown.size() - 43);
-    shown += ((int)(GetTime() * 2) % 2 == 0) ? "|" : " ";
-    app.tokenDisplay = shown;
+    // what the fields show: the token is masked unless "Show" is active; the
+    // focused field gets a blinking caret
+    const bool caretOn = ((int)(GetTime() * 2) % 2) == 0;
+    for (int i = 0; i < App::FIELD_COUNT; ++i) {
+        std::string shown = app.fieldValue[i];
+        if (i == App::FIELD_TOKEN && !app.tokenVisible && shown.size() > 3)
+            shown = shown.substr(0, 3) + std::string(shown.size() - 3, '*');
+        if (shown.size() > 46) shown = "..." + shown.substr(shown.size() - 43);
+        if (i == app.focusedField) shown += caretOn ? "|" : " ";
+        app.fieldDisplay[i] = shown;
+    }
 
     const std::string path = app.cfg.loadedFrom.empty() ? userConfigDir() + "config.json" : app.cfg.loadedFrom;
     app.modalPathLine = "Stored in " + textutil::toAscii(path);
@@ -744,7 +782,7 @@ void pollBackground(App &app) {
         } else {
             app.errorLine = res->error;
             std::fprintf(stderr, "[fetch] error: %s\n", res->error.c_str());
-            if (res->error.find("401") != std::string::npos) openTokenModal(app, "ClickUp rejected this token.");
+            if (res->error.find("401") != std::string::npos) openSettings(app, "ClickUp rejected this token.");
         }
     }
     // 2) small jobs
@@ -838,9 +876,9 @@ void layoutHeader(App &app) {
                 CLAY(CLAY_ID("HeaderUser"), {.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0)}}}) {
                     CLAY_TEXT(S(app.userLine), MUTED_SM);
                 }
-                static const std::string kToken = "Token";
-                if (chipButton(CLAY_ID("TokenBtn"), kToken, TAB_SM, C_CHIP, C_CHIP_H, Clay_Padding{9, 9, 7, 7}))
-                    openTokenModal(app, "");
+                static const std::string kSettings = "Settings";
+                if (chipButton(CLAY_ID("SettingsBtn"), kSettings, TAB_SM, C_CHIP, C_CHIP_H, Clay_Padding{9, 9, 7, 7}))
+                    openSettings(app, "");
                 layoutRefreshButton(app, busy, 88, 30, BUTTON_SM);
             }
             CLAY(CLAY_ID("HeaderStatusRow"), {.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0)},
@@ -869,9 +907,9 @@ void layoutHeader(App &app) {
                                                   .childAlignment = {.x = CLAY_ALIGN_X_RIGHT}}}) {
             CLAY_TEXT(S(app.statusLine), app.errorLine.empty() || busy ? STATUS_TEXT : STATUS_ERR);
         }
-        static const std::string kToken = "Token";
-        if (chipButton(CLAY_ID("TokenBtn"), kToken, TAB_TEXT, C_CHIP, C_CHIP_H, Clay_Padding{12, 12, 9, 9}))
-            openTokenModal(app, "");
+        static const std::string kSettings = "Settings";
+        if (chipButton(CLAY_ID("SettingsBtn"), kSettings, TAB_TEXT, C_CHIP, C_CHIP_H, Clay_Padding{12, 12, 9, 9}))
+            openSettings(app, "");
         layoutRefreshButton(app, busy, 110, 36, BUTTON_TEXT);
     }
 }
@@ -1163,14 +1201,42 @@ void layoutBody(App &app) {
     }
 }
 
-// Modal dialog to enter the ClickUp token. A floating element attached to the
-// root covers the whole window and captures the pointer, so nothing behind it
-// reacts to clicks while it is open.
-void layoutTokenModal(App &app) {
+// One labelled text field of the settings dialog. Clicking it moves the focus.
+void layoutSettingsField(App &app, int idx, const char *label, const std::string &placeholder) {
+    const bool focused = app.focusedField == idx;
+    CLAY(CLAY_IDI("FieldBox", idx), {.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0)},
+                                                .childGap = 4,
+                                                .layoutDirection = CLAY_TOP_TO_BOTTOM}}) {
+        const Clay_String labelStr{true, (int32_t)std::strlen(label), label};  // literal, lives forever
+        CLAY_TEXT(labelStr, LABEL_TEXT);
+        CLAY(CLAY_IDI("Field", idx), {.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(38)},
+                                                 .padding = {12, 12, 0, 0},
+                                                 .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
+                                      .backgroundColor = C_BG,
+                                      .cornerRadius = CLAY_CORNER_RADIUS(6),
+                                      .clip = {.horizontal = true},
+                                      .border = {.color = focused ? C_ACCENT : C_ROW_H, .width = CLAY_BORDER_OUTSIDE(1)}}) {
+            if (Clay_Hovered() && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) app.focusedField = idx;
+            if (app.fieldValue[idx].empty() && !focused)
+                CLAY_TEXT(S(placeholder), Clay_TextElementConfig{.textColor = C_MUTED, .fontId = 0, .fontSize = 15,
+                                                                 .wrapMode = CLAY_TEXT_WRAP_NONE});
+            else
+                CLAY_TEXT(S(app.fieldDisplay[idx]), Clay_TextElementConfig{.textColor = C_TEXT, .fontId = 0,
+                                                                          .fontSize = 15, .letterSpacing = 1,
+                                                                          .wrapMode = CLAY_TEXT_WRAP_NONE});
+        }
+    }
+}
+
+// Settings dialog. A floating element attached to the root covers the whole
+// window and captures the pointer, so nothing behind it reacts while it is open.
+void layoutSettingsModal(App &app) {
     const float w = (float)GetScreenWidth(), h = (float)GetScreenHeight();
-    const float boxW = std::min(470.0f, w - 24.0f);
-    static const std::string kPaste = "Paste", kShow = "Show", kHide = "Hide", kClear = "Clear",
-                             kCancel = "Cancel", kSave = "Save token";
+    const float boxW = std::min(480.0f, w - 24.0f);
+    static const std::string kPaste = "Paste", kShow = "Show token", kHide = "Hide token", kClear = "Clear",
+                             kCancel = "Cancel", kSave = "Save";
+    static const std::string kPhToken = "pk_...", kPhEmail = "you@company.com (optional)",
+                             kPhUser = "Your ClickUp username (optional)";
 
     CLAY(CLAY_ID("ModalBackdrop"), {.layout = {.sizing = {CLAY_SIZING_FIXED(w), CLAY_SIZING_FIXED(h)},
                                                .childAlignment = {CLAY_ALIGN_X_CENTER, CLAY_ALIGN_Y_CENTER}},
@@ -1193,36 +1259,27 @@ void layoutTokenModal(App &app) {
                 CLAY(CLAY_ID("ModalTitleCol"), {.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0)},
                                                            .childGap = 2,
                                                            .layoutDirection = CLAY_TOP_TO_BOTTOM}}) {
-                    CLAY_TEXT(CLAY_STRING("Connect apcy to ClickUp"), DETAIL_TITLE);
-                    CLAY_TEXT(CLAY_STRING("Personal API token"), MUTED_SM);
+                    CLAY_TEXT(CLAY_STRING("Settings"), DETAIL_TITLE);
+                    CLAY_TEXT(CLAY_STRING("ClickUp connection"), MUTED_SM);
                 }
             }
             CLAY_TEXT(CLAY_STRING("In ClickUp open Settings > Apps > API Token and press Generate. "
-                                  "Paste the token below; it starts with pk_ and is only stored on this computer."),
+                                  "The token starts with pk_ and is only stored on this computer."),
                       MUTED_SM);
 
-            CLAY(CLAY_ID("TokenInput"), {.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(40)},
-                                                    .padding = {12, 12, 0, 0},
-                                                    .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
-                                         .backgroundColor = C_BG,
-                                         .cornerRadius = CLAY_CORNER_RADIUS(6),
-                                         .clip = {.horizontal = true},
-                                         .border = {.color = C_ACCENT, .width = CLAY_BORDER_OUTSIDE(1)}}) {
-                if (app.tokenInput.empty())
-                    CLAY_TEXT(CLAY_STRING("pk_..."), Clay_TextElementConfig{.textColor = C_MUTED, .fontId = 0,
-                                                                          .fontSize = 15, .wrapMode = CLAY_TEXT_WRAP_NONE});
-                else
-                    CLAY_TEXT(S(app.tokenDisplay), Clay_TextElementConfig{.textColor = C_TEXT, .fontId = 0,
-                                                                        .fontSize = 15, .letterSpacing = 1,
-                                                                        .wrapMode = CLAY_TEXT_WRAP_NONE});
-            }
-
+            layoutSettingsField(app, App::FIELD_TOKEN, "API TOKEN", kPhToken);
             CLAY(CLAY_ID("ModalTools"), {.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0)}, .childGap = 6}}) {
-                if (chipButton(CLAY_ID("PasteBtn"), kPaste, TAB_SM, C_CHIP, C_CHIP_H)) appendTokenText(app, GetClipboardText());
+                if (chipButton(CLAY_ID("PasteBtn"), kPaste, TAB_SM, C_CHIP, C_CHIP_H)) appendToField(app, GetClipboardText());
                 if (chipButton(CLAY_ID("ShowBtn"), app.tokenVisible ? kHide : kShow, TAB_SM, C_CHIP, C_CHIP_H))
                     app.tokenVisible = !app.tokenVisible;
-                if (chipButton(CLAY_ID("ClearBtn"), kClear, TAB_SM, C_CHIP, C_CHIP_H)) app.tokenInput.clear();
+                if (chipButton(CLAY_ID("ClearBtn"), kClear, TAB_SM, C_CHIP, C_CHIP_H)) app.fieldValue[app.focusedField].clear();
             }
+
+            CLAY_TEXT(CLAY_STRING("Mentions are matched against the profile of the token. Set an email or username "
+                                  "here to match against those instead (for example a shared or secondary account)."),
+                      MUTED_SM);
+            layoutSettingsField(app, App::FIELD_EMAIL, "EMAIL", kPhEmail);
+            layoutSettingsField(app, App::FIELD_USERNAME, "USERNAME", kPhUser);
 
             if (!app.modalError.empty()) CLAY_TEXT(S(app.modalError), ERROR_SM);
             CLAY_TEXT(S(app.modalPathLine), MUTED_SM);
@@ -1230,12 +1287,12 @@ void layoutTokenModal(App &app) {
             CLAY(CLAY_ID("ModalActions"), {.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0)},
                                                       .childGap = 8,
                                                       .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}}) {
-                if (app.modalCanCancel) CLAY_TEXT(CLAY_STRING("Enter: save   Esc: cancel"), MUTED_SM);
-                else CLAY_TEXT(CLAY_STRING("Enter: save"), MUTED_SM);
+                if (app.modalCanCancel) CLAY_TEXT(CLAY_STRING("Tab: next field   Enter: save   Esc: cancel"), MUTED_SM);
+                else CLAY_TEXT(CLAY_STRING("Tab: next field   Enter: save"), MUTED_SM);
                 CLAY(CLAY_ID("ModalSpacer"), {.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(1)}}}) {}
                 if (app.modalCanCancel && chipButton(CLAY_ID("CancelBtn"), kCancel, BUTTON_SM, C_CHIP, C_CHIP_H))
-                    closeTokenModal(app);
-                if (chipButton(CLAY_ID("SaveBtn"), kSave, BUTTON_SM, C_ACCENT, C_ACCENT_H)) saveTokenFromModal(app);
+                    closeSettings(app);
+                if (chipButton(CLAY_ID("SaveBtn"), kSave, BUTTON_SM, C_ACCENT, C_ACCENT_H)) saveSettingsFromModal(app);
             }
         }
     }
@@ -1255,7 +1312,7 @@ Clay_RenderCommandArray buildLayout(App &app) {
         layoutBody(app);
         if (app.compact) CLAY_TEXT(S(app.footerShort), MUTED_SM);
         else CLAY_TEXT(S(app.footerLine), MUTED_TEXT);
-        if (app.modalOpen) layoutTokenModal(app);
+        if (app.modalOpen) layoutSettingsModal(app);
     }
     return Clay_EndLayout(GetFrameTime());
 }
@@ -1498,7 +1555,7 @@ int main(int argc, char **argv) {
 
     if (demo) loadDemo(app);
     else if (!app.cfg.token.empty()) startFetch(app);
-    else openTokenModal(app, "");  // first run: ask for the token right away
+    else openSettings(app, "");  // first run: ask for the token right away
 
     while (!WindowShouldClose()) {
         frame(app);

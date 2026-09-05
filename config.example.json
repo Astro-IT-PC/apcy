@@ -1,6 +1,8 @@
 {
   "token": "pk_your_personal_api_token",
   "team_id": "",
+  "user_email": "",
+  "username": "",
   "include_closed": false,
   "comment_scan_days": 14,
   "max_comment_scan": 150,

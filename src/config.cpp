@@ -71,6 +71,8 @@ Config loadConfig(int argc, char **argv, const std::string &appDir) {
         } else {
             cfg.token = j.value("token", cfg.token);
             cfg.teamId = j.value("team_id", cfg.teamId);
+            cfg.userEmail = j.value("user_email", cfg.userEmail);
+            cfg.userName = j.value("username", cfg.userName);
             cfg.includeClosed = j.value("include_closed", cfg.includeClosed);
             cfg.commentScanDays = j.value("comment_scan_days", cfg.commentScanDays);
             cfg.maxCommentScan = j.value("max_comment_scan", cfg.maxCommentScan);
@@ -95,7 +97,8 @@ Config loadConfig(int argc, char **argv, const std::string &appDir) {
     return cfg;
 }
 
-bool saveToken(Config &cfg, const std::string &token, std::string &error) {
+bool saveSettings(Config &cfg, const std::string &token, const std::string &email, const std::string &username,
+                  std::string &error) {
     std::string path = cfg.loadedFrom;
     json j = json::object();
 
@@ -124,6 +127,8 @@ bool saveToken(Config &cfg, const std::string &token, std::string &error) {
     if (!j.contains("refresh_minutes")) j["refresh_minutes"] = cfg.refreshMinutes;
     if (!j.contains("mention_patterns")) j["mention_patterns"] = cfg.mentionPatterns;
     j["token"] = token;
+    j["user_email"] = email;
+    j["username"] = username;
 
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out) {
@@ -137,6 +142,8 @@ bool saveToken(Config &cfg, const std::string &token, std::string &error) {
     }
 
     cfg.token = token;
+    cfg.userEmail = email;
+    cfg.userName = username;
     cfg.loadedFrom = path;
     cfg.error.clear();
     return true;

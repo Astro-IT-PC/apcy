@@ -3,6 +3,10 @@ project(apcy VERSION 0.1.0 LANGUAGES C CXX)
 
 option(APCY_BUNDLE "macOS: build apcy as an .app bundle (used for packaging)" OFF)
 option(APCY_WIN32_GUI "Windows: build without a console window" ON)
+# macOS: identity passed to `codesign` when packaging. "-" is an ad-hoc signature
+# (valid, but Gatekeeper still asks the user to allow the app once). Use your
+# "Developer ID Application: ..." identity for distribution.
+set(APCY_CODESIGN_IDENTITY "-" CACHE STRING "macOS codesign identity used when packaging")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -204,6 +208,35 @@ else()
     install(FILES resources/logo-256.png DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps
             RENAME apcy.png COMPONENT apcy)
   endif()
+endif()
+
+# macOS: (re)sign after install. CPack strips the binary while installing, which
+# invalidates the linker's ad-hoc signature, and a bundle needs a signature that
+# covers its Resources too. Without this step Gatekeeper reports the downloaded
+# app as "damaged". Runs after the install(TARGETS) rules above.
+if(APPLE)
+  if(APCY_BUNDLE)
+    set(_apcy_sign_target "\${CMAKE_INSTALL_PREFIX}/apcy.app")
+  else()
+    set(_apcy_sign_target "\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/apcy")
+  endif()
+  if(APCY_CODESIGN_IDENTITY STREQUAL "-")
+    set(_apcy_sign_flags --timestamp=none)
+  else()
+    set(_apcy_sign_flags --timestamp)
+  endif()
+  install(CODE "
+    message(STATUS \"codesign (${APCY_CODESIGN_IDENTITY}): ${_apcy_sign_target}\")
+    execute_process(
+      COMMAND codesign --force --deep --options runtime ${_apcy_sign_flags}
+              --sign \"${APCY_CODESIGN_IDENTITY}\" \"${_apcy_sign_target}\"
+      RESULT_VARIABLE _apcy_rc)
+    if(NOT _apcy_rc EQUAL 0)
+      message(FATAL_ERROR \"codesign failed (\${_apcy_rc})\")
+    endif()
+  " COMPONENT apcy)
+  unset(_apcy_sign_target)
+  unset(_apcy_sign_flags)
 endif()
 
 set(CPACK_PACKAGE_NAME "apcy")
