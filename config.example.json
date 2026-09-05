@@ -1,0 +1,9 @@
+{
+  "token": "pk_your_personal_api_token",
+  "team_id": "",
+  "include_closed": false,
+  "comment_scan_days": 14,
+  "max_comment_scan": 150,
+  "refresh_minutes": 10,
+  "mention_patterns": ["@{username}", "@author:{email}", "{email}"]
+}

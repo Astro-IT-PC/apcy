@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=apcy
+Comment=ClickUp tasks assigned to you or mentioning you
+Exec=apcy
+Terminal=false
+Categories=Office;ProjectManagement;
+Keywords=clickup;tasks;todo;
